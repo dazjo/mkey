@@ -1,0 +1,19 @@
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+*.bin
+*.exe
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+
+*.tmp
+*.bak
+*.swp
+*~.nib
+
+# Project-specific
+mkey
