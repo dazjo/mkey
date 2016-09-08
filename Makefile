@@ -7,7 +7,7 @@ OBJS      = $(CFILES:.c=.o) $(CPPFILES:.cpp=.o)
 
 LIBS      = -static-libstdc++ -static
 CXXFLAGS  = -Isource
-CFLAGS    = -std=c11 -Wall -Wextra -Werror -O3 -posix -Isource
+CFLAGS    = -std=c11 -Wall -Wextra -Werror -O3 -posix -Isource -D_GNU_SOURCE
 OUTPUT    = mkey
 CC        = gcc
 

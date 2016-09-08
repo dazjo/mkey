@@ -22,14 +22,14 @@
 #define MAIN_ARGS_REQUIRED (4)
 
 const char* main_format_devices(void);
-void main_set_data_path(mkey_ctx* ctx, const char* exec);
+void main_set_data_path(mkey_ctx* ctx);
 
 int main(int argc, const char* argv[])
 {
     mkey_ctx ctx;
     mkey_init(&ctx, false, NULL);
 
-    main_set_data_path(&ctx, argv[0]);
+    main_set_data_path(&ctx);
 
     const char* default_device = "CTR";
     mkey_set_default_device(&ctx, default_device);
@@ -110,20 +110,29 @@ const char* main_format_devices(void)
     return buffer;
 }
 
+#if __linux__
+#include <unistd.h>
+#elif _WIN32
+#include <Windows.h>
+#endif
+
 // :-(
-void main_set_data_path(mkey_ctx* ctx, const char* exec)
+void main_set_data_path(mkey_ctx* ctx)
 {
-    const char* end = strrchr(exec, '/');
-
-    int length = 0;
-    if(end) length = strlen(exec) - strlen(end);
-
     char path[MAX_PATH];
-    end = getcwd(path, sizeof(path));
+    const char* end = NULL;
+
+#if __linux__
+    if(readlink("/proc/self/exe", path, sizeof(path)) <= 0) return;
+    end = strrchr(path, '/');
+#elif _WIN32
+    if(GetModuleFileName(NULL, path, sizeof(path)) == 0) return;
+    end = strrchr(path, '\\');
+#endif
     if(!end) return;
 
-    if(length) sprintf(path, "%s/%.*s/data", path, length, exec);
-    else sprintf(path, "%s/data", path);
+    int length = strlen(path) - strlen(end);
+    sprintf(path, "%.*s/data", length, path);
 
     mkey_set_data_path(ctx, path);
 }
