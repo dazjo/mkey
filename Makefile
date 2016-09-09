@@ -11,7 +11,7 @@ CFLAGS    = -std=c11 -Wall -Wextra -Werror -O3 -posix -Isource -D_GNU_SOURCE
 OUTPUT    = mkey
 CC        = gcc
 
-main: $(OBJS) $(POLAR_OBJS)
+main: $(OBJS)
 	g++ -o $(OUTPUT) $(LIBS) $(OBJS)
 
 clean:
