@@ -1,7 +1,7 @@
 #
 # mkey - parental controls master key generator for certain video game consoles
-# Copyright (C) 2015-2016, Daz Jones (Dazzozo) <daz@dazzozo.com>
-# Copyright (C) 2015-2016, SALT
+# Copyright (C) 2015-2017, Daz Jones (Dazzozo) <daz@dazzozo.com>
+# Copyright (C) 2015-2017, SALT
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
@@ -19,7 +19,7 @@
 
 from __future__ import print_function
 
-import os, struct
+import os, struct, datetime
 
 from Crypto.Cipher import AES
 from Crypto.Hash import SHA256, HMAC
@@ -76,6 +76,12 @@ class mkey_generator():
                 "traits": ["no-versions"],
                 "mkey_file": "wii_%02x.bin",
                 "aes_file": "wii_aes_%02x.bin",
+            },
+        },
+        "HAC": {
+            "algorithms": ["v3"],
+            "v3": {
+                "hmac_file": "hac_%02x.bin",
             },
         },
     }
@@ -138,7 +144,7 @@ class mkey_generator():
         mkey_data = struct.unpack("BB14x16s32s", data)
         return mkey_data
 
-    # Read HMAC key (v1).
+    # Read HMAC key (v1/v3).
     def _read_hmac_key(self, file_name):
         file_path = os.path.join(self._data_path, file_name)
         if self._dbg: print("Using %s." % file_path)
@@ -168,6 +174,8 @@ class mkey_generator():
                 return "v1"
             elif "v2" in algorithms:
                 return "v2"
+            elif "v3" in algorithms:
+                return "v3"
             else:
                 raise ValueError("v1/v2 algorithms not supported by %s." % device)
         else:
@@ -210,7 +218,12 @@ class mkey_generator():
             print("CRC input:")
             self._hexdump(inbuf)
 
-        return self._calculate_crc(poly, xorout, addout, inbuf)
+        output = self._calculate_crc(poly, xorout, addout, inbuf)
+        if self._dbg: print("Output word: %u.\n" % output)
+
+        # Truncate to 5 decimal digits to form the final master key.
+        master_key = output % 100000
+        return "%05d" % master_key
 
     def _generate_v1_v2(self, props, inquiry, month, day):
         algorithm = props["algorithm"]
@@ -319,14 +332,67 @@ class mkey_generator():
 
         # Wii U is big endian.
         if "big-endian" in traits:
-            return struct.unpack_from(">I", outbuf)[0]
+            output = struct.unpack_from(">I", outbuf)[0]
         else:
-            return struct.unpack_from("<I", outbuf)[0]
+            output = struct.unpack_from("<I", outbuf)[0]
 
-    def generate(self, inquiry, month, day, device = None):
+        if self._dbg: print("Output word: %u.\n" % output)
+
+        # Truncate to 5 decimal digits to form the final master key.
+        master_key = output % 100000
+        return "%05d" % master_key
+
+    def _generate_v3(self, props, inquiry):
+        algorithm = props["algorithm"]
+        traits = props["traits"]
+
+        if self._data_path and not os.path.isdir(self._data_path):
+            self._data_path = None
+
+        if not self._data_path:
+            raise ValueError("v3 attempted, but data directory doesn't exist or was not specified.")
+
+        version = int((inquiry / 100000000) % 100)
+
+        file_name = props["hmac_file"] % version
+        mkey_hmac_key = self._read_hmac_key(file_name)
+
+        if self._dbg: print("")
+
+        # Create the input buffer.
+        inbuf = "%010u" % (inquiry % 10000000000)
+        inbuf = inbuf.encode("ascii")
+
+        if self._dbg:
+            print("HMAC key:")
+            self._hexdump(mkey_hmac_key)
+
+            print("Hash input:")
+            self._hexdump(inbuf)
+
+        outbuf = HMAC.new(mkey_hmac_key, inbuf, digestmod = SHA256).digest()
+
+        if self._dbg:
+            print("Hash output:")
+            self._hexdump(outbuf)
+
+        output = struct.unpack_from("<Q", outbuf)[0] & 0x0000FFFFFFFFFFFF
+
+        if self._dbg: print("Output word: %u.\n" % output)
+
+        # Truncate to 8 decimal digits to form the final master key.
+        master_key = output % 100000000
+        return "%08d" % master_key
+
+    def generate(self, inquiry, month = None, day = None, device = None):
         inquiry = inquiry.replace(" ", "")
         if not inquiry.isdigit():
             raise ValueError("Inquiry string must represent a decimal number.")
+
+        if month is None:
+            month = datetime.date.today().month
+        if day is None:
+            day = datetime.date.today().day
 
         if month < 1 or month > 12:
             raise ValueError("Month must be between 1 and 12.")
@@ -366,12 +432,10 @@ class mkey_generator():
             output = self._generate_v0(props, inquiry, month, day)
         elif algorithm == "v1" or algorithm == "v2":
             output = self._generate_v1_v2(props, inquiry, month, day)
+        elif algorithm == "v3":
+            output = self._generate_v3(props, inquiry)
 
-        if self._dbg: print("Output word: %u.\n" % output)
-
-        # Truncate to 5 decimal digits to form the final master key.
-        master_key = output % 100000
-        return "%05d" % master_key
+        return output
 
 def main():
     import argparse
@@ -382,10 +446,10 @@ def main():
     parser.add_argument("inquiry", type = str, help = desc)
 
     desc = "month displayed on device (system date)"
-    parser.add_argument("month", type = int, help = desc)
+    parser.add_argument("-m", "--month", type = int, help = desc)
 
     desc = "day displayed on device (system date)"
-    parser.add_argument("day", type = int, help = desc)
+    parser.add_argument("-d", "--day", type = int, help = desc)
 
     desc = "device type (%s by default)" % mkey_generator.default_device
     parser.add_argument("device", type = str, help = desc, nargs = "?",

@@ -1,7 +1,7 @@
 /*
  * mkey - parental controls master key generator for certain video game consoles
- * Copyright (C) 2015-2016, Daz Jones (Dazzozo) <daz@dazzozo.com>
- * Copyright (C) 2015-2016, SALT
+ * Copyright (C) 2015-2017, Daz Jones (Dazzozo) <daz@dazzozo.com>
+ * Copyright (C) 2015-2017, SALT
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published
@@ -25,7 +25,7 @@
 #include "ctr.h"
 #include "polarssl/sha2.h"
 
-const char mkey_devices[][4] = {"RVL", "TWL", "CTR", "WUP"};
+const char mkey_devices[][4] = {"RVL", "TWL", "CTR", "WUP", "HAC"};
 const char* mkey_default_device = "CTR";
 
 int mkey_num_devices(void)
@@ -50,6 +50,10 @@ typedef struct {
 } mkey_v2_props;
 
 typedef struct {
+    const char* hmac_file;
+} mkey_v3_props;
+
+typedef struct {
     const char* device;
     u32 algorithms;
 
@@ -58,6 +62,7 @@ typedef struct {
     mkey_v0_props v0;
     mkey_v1_props v1;
     mkey_v2_props v2;
+    mkey_v3_props v3;
 } mkey_props;
 
 typedef struct {
@@ -73,7 +78,7 @@ static const mkey_props _props[sizeof(mkey_devices) / sizeof(*mkey_devices)] =
     [0] =
     {
         .device = mkey_devices[0],
-        .algorithms = 0b001,
+        .algorithms = 0b0001,
         .big_endian = true,
         .v0 = {
             .poly = 0xEDB88320,
@@ -85,7 +90,7 @@ static const mkey_props _props[sizeof(mkey_devices) / sizeof(*mkey_devices)] =
     [1] =
     {
         .device = mkey_devices[1],
-        .algorithms = 0b001,
+        .algorithms = 0b0001,
         .v0 = {
             .poly = 0xEDB88320,
             .xorout = 0xAAAA,
@@ -96,7 +101,7 @@ static const mkey_props _props[sizeof(mkey_devices) / sizeof(*mkey_devices)] =
     [2] =
     {
         .device = mkey_devices[2],
-        .algorithms = 0b111,
+        .algorithms = 0b0111,
         .v0 = {
             .poly = 0xEDBA6320,
             .xorout = 0xAAAA,
@@ -114,7 +119,7 @@ static const mkey_props _props[sizeof(mkey_devices) / sizeof(*mkey_devices)] =
     [3] =
     {
         .device = mkey_devices[3],
-        .algorithms = 0b101,
+        .algorithms = 0b0101,
         .big_endian = true,
         .v0 = {
             .poly = 0xEDBA6320,
@@ -125,6 +130,15 @@ static const mkey_props _props[sizeof(mkey_devices) / sizeof(*mkey_devices)] =
             .no_versions = true,
             .mkey_file = "wii_%02"PRIx8".bin",
             .aes_file = "wii_aes_%02"PRIx8".bin",
+        },
+    },
+
+    [4] =
+    {
+        .device = mkey_devices[4],
+        .algorithms = 0b1000,
+        .v3 = {
+            .hmac_file = "hac_%02"PRIx8".bin",
         },
     },
 };
@@ -161,6 +175,8 @@ static int mkey_detect_algorithm(mkey_session* session, const char* inquiry_numb
             return 1;
         else if (props->algorithms & BIT(2))
             return 2;
+        else if (props->algorithms & BIT(3))
+            return 3;
         else {
             if(ctx->dbg) printf("Error: v1/v2 algorithms not supported by %s.\n", session->device);
             return -1;
@@ -175,7 +191,7 @@ static int mkey_detect_algorithm(mkey_session* session, const char* inquiry_numb
 
 static u32 mkey_calculate_crc(u32 poly, u32 xorout, u32 addout, const void* inbuf, size_t size);
 
-static int mkey_generate_v0(mkey_session* session, u64 inquiry, u8 month, u8 day, u32* output)
+static int mkey_generate_v0(mkey_session* session, u64 inquiry, u8 month, u8 day, char* master_key)
 {
     mkey_ctx* ctx = session->ctx;
     const mkey_props* props = session->props;
@@ -197,7 +213,13 @@ static int mkey_generate_v0(mkey_session* session, u64 inquiry, u8 month, u8 day
         hexdump(inbuf, strlen(inbuf));
     }
 
-    *output = mkey_calculate_crc(poly, xorout, addout, (u8*)inbuf, strlen(inbuf));
+    u32 output = mkey_calculate_crc(poly, xorout, addout, (u8*)inbuf, strlen(inbuf));
+
+    if(ctx->dbg) printf("\nOutput word: %"PRIu32".\n", output);
+
+    // Truncate to 5 decimal digits to form the final master key.
+    snprintf(master_key, 10, "%05d", output % 100000);
+
     return 0;
 }
 
@@ -205,7 +227,7 @@ static int mkey_read_aes_key(mkey_session* session, const char* file_name, void*
 static int mkey_read_mkey_file(mkey_session* session, const char* file_name, void* out);
 static int mkey_read_hmac_key(mkey_session* session, const char* file_name, void* out);
 
-static int mkey_generate_v1_v2(mkey_session* session, u64 inquiry, u8 month, u8 day, u32* output)
+static int mkey_generate_v1_v2(mkey_session* session, u64 inquiry, u8 month, u8 day, char* master_key)
 {
     int ret = 0;
     mkey_ctx* ctx = session->ctx;
@@ -336,16 +358,80 @@ static int mkey_generate_v1_v2(mkey_session* session, u64 inquiry, u8 month, u8 
         hexdump(outbuf, sizeof(outbuf));
     }
 
+    u32 output = 0;
+
     // Wii U is big endian.
     if(props->big_endian)
-        *output = getbe32(outbuf);
+        output = getbe32(outbuf);
     else
-        *output = getle32(outbuf);
+        output = getle32(outbuf);
+
+    if(ctx->dbg) printf("\nOutput word: %"PRIu32".\n", output);
+
+    // Truncate to 5 decimal digits to form the final master key.
+    snprintf(master_key, 10, "%05d", output % 100000);
 
     return 0;
 }
 
-int mkey_generate(mkey_ctx* ctx, const char* inquiry_number, u8 month, u8 day, const char* device)
+static int mkey_generate_v3(mkey_session* session, u64 inquiry, char* master_key)
+{
+    int ret = 0;
+    mkey_ctx* ctx = session->ctx;
+    const const mkey_props* props = session->props;
+
+    struct stat st;
+    if(!ctx->data_path_set || stat(ctx->data_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        if(ctx->dbg) printf("v3 attempted, but data directory doesn't exist or was not specified.\n");
+        return -1;
+    }
+
+    mkey_data data = {0};
+
+    /*
+     * Extract key ID fields from inquiry number.
+     * If this system uses masterkey.bin, there is an AES key for the region which is also required.
+     * This key is used to decrypt the encrypted HMAC key stored in masterkey.bin. See below.
+     */
+    u8 version = (inquiry / 100000000) % 100;
+
+    char file_name[MAX_PATH] = {0};
+
+    snprintf(file_name, sizeof(file_name), props->v3.hmac_file, version);
+    ret = mkey_read_hmac_key(session, file_name, data.hmac_key);
+    if(ret) return -2;
+
+    // Create the input buffer.
+    char inbuf[15] = {0};
+    snprintf(inbuf, sizeof(inbuf), "%010"PRIu64, inquiry % 10000000000);
+
+    if(ctx->dbg) {
+        printf("\nHMAC key:\n");
+        hexdump(data.hmac_key, sizeof(data.hmac_key));
+
+        printf("\nHash input:\n");
+        hexdump(inbuf, strlen(inbuf));
+    }
+
+    u8 outbuf[0x20] = {0};
+    sha2_hmac(data.hmac_key, sizeof(data.hmac_key), (u8*)inbuf, strlen(inbuf), outbuf, false);
+
+    if(ctx->dbg) {
+        printf("\nHash output:\n");
+        hexdump(outbuf, sizeof(outbuf));
+    }
+
+    u64 output = getle64(outbuf) & 0x0000FFFFFFFFFFFF;
+
+    if(ctx->dbg) printf("\nOutput word: %"PRIu64".\n", output);
+
+    // Truncate to 8 decimal digits to form the final master key.
+    snprintf(master_key, 10, "%08"PRId64, output % 100000000);
+
+    return 0;
+}
+
+int mkey_generate(mkey_ctx* ctx, const char* inquiry_number, u8 month, u8 day, const char* device, char* master_key)
 {
     int res = 0;
 
@@ -382,23 +468,18 @@ int mkey_generate(mkey_ctx* ctx, const char* inquiry_number, u8 month, u8 day, c
     if(session.algorithm < 0) return -2;
 
     // Perform calculation of master key.
-    u32 output = 0;
-
     if(session.algorithm == 0)
-        res = mkey_generate_v0(&session, inquiry, month, day, &output);
+        res = mkey_generate_v0(&session, inquiry, month, day, master_key);
     else if(session.algorithm == 1 || session.algorithm == 2)
-        res = mkey_generate_v1_v2(&session, inquiry, month, day, &output);
+        res = mkey_generate_v1_v2(&session, inquiry, month, day, master_key);
+    else if(session.algorithm == 3)
+        res = mkey_generate_v3(&session, inquiry, master_key);
 
     if(res) return -3;
 
-    if(ctx->dbg) printf("\nOutput word: %"PRIu32".\n", output);
-
-    // Truncate to 5 decimal digits to form the final master key.
-    int master_key = output % 100000;
-
     if(ctx->dbg) printf("\n");
 
-    return master_key;
+    return 0;
 }
 
 // Read AES key (v2).
@@ -487,7 +568,7 @@ static int mkey_read_mkey_file(mkey_session* session, const char* file_name, voi
     return 0;
 }
 
-// Read HMAC key (v1).
+// Read HMAC key (v1/v3).
 static int mkey_read_hmac_key(mkey_session* session, const char* file_name, void* out)
 {
     if(!file_name || !out) return -1;

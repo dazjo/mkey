@@ -1,6 +1,6 @@
 /*
  * mkey - parental controls master key generator for certain video game consoles
- * Copyright (C) 2015-2016, Daz Jones (Dazzozo) <daz@dazzozo.com>
+ * Copyright (C) 2015-2017, Daz Jones (Dazzozo) <daz@dazzozo.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published
@@ -19,7 +19,9 @@
 #include "mkey.h"
 #include "types.h"
 
-#define MAIN_ARGS_REQUIRED (4)
+#include <time.h>
+
+#define MAIN_ARGS_REQUIRED (2)
 
 const char* main_format_devices(void);
 void main_set_data_path(mkey_ctx* ctx);
@@ -36,7 +38,7 @@ int main(int argc, const char* argv[])
 
     if(argc < MAIN_ARGS_REQUIRED) {
 
-        printf("Usage: mkey <inquiry> <month> <day> [device] [-v]\n");
+        printf("Usage: mkey <inquiry> [-p device] [-m month] [-d day] [-v]\n");
         printf("mkey (c) 2015-2016, SALT\n\n");
 
         printf("inquiry          8 or 10 digit inquiry number\n");
@@ -51,7 +53,7 @@ int main(int argc, const char* argv[])
         exit(EXIT_FAILURE);
     }
 
-    if(!isnumeric(argv[1]) || !isnumeric(argv[2]) || !isnumeric(argv[3])) {
+    if(!isnumeric(argv[1])) {
         printf("Error: input values must be numbers.\n");
         exit(EXIT_FAILURE);
     }
@@ -62,24 +64,44 @@ int main(int argc, const char* argv[])
         exit(EXIT_FAILURE);
     }
 
-    u8 month = strtoul(argv[2], 0, 10);
-    u8 day = strtoul(argv[3], 0, 10);
-
     // Optional parameters.
     argc -= MAIN_ARGS_REQUIRED;
     argv += MAIN_ARGS_REQUIRED;
+
+    time_t t = time(NULL);
+    struct tm tm = *localtime(&t);
+
+    u8 month = tm.tm_mon + 1;
+    u8 day = tm.tm_mday;
 
     const char* device = NULL;
     bool debug = false;
 
     for(int i = 0; i < argc; i++) {
-        if(argv[i][0] != '-') device = argv[i];
+        if(!strcmp(argv[i], "-p") || !strcmp(argv[i], "--device")) device = argv[i + 1];
         if(!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) debug = true;
+        if(!strcmp(argv[i], "-m") || !strcmp(argv[i], "--month"))
+        {
+            if(!isnumeric(argv[i + 1])) {
+                printf("Error: input values must be numbers.\n");
+                exit(EXIT_FAILURE);
+            }
+            month = strtoul(argv[i + 1], 0, 10);
+        }
+        if(!strcmp(argv[i], "-d") || !strcmp(argv[i], "--day"))
+        {
+            if(!isnumeric(argv[i + 1])) {
+                printf("Error: input values must be numbers.\n");
+                exit(EXIT_FAILURE);
+            }
+            day = strtoul(argv[i + 1], 0, 10);
+        }
     }
 
     if(debug) mkey_set_debug(&ctx, true);
 
-    int result = mkey_generate(&ctx, inquiry, month, day, device);
+    char master_key[10] = {0};
+    int result = mkey_generate(&ctx, inquiry, month, day, device, master_key);
     if(result < 0) {
         if(!debug) {
             printf("An error occurred. Your input values may be incorrect, or you may be missing a key file.\n");
@@ -89,7 +111,7 @@ int main(int argc, const char* argv[])
         exit(EXIT_FAILURE);
     }
 
-    printf("Master key is %05d.\n", result);
+    printf("Master key is %s.\n", master_key);
     return 0;
 }
 

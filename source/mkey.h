@@ -1,7 +1,7 @@
 /*
  * mkey - parental controls master key generator for certain video game consoles
- * Copyright (C) 2015-2016, Daz Jones (Dazzozo) <daz@dazzozo.com>
- * Copyright (C) 2015-2016, SALT
+ * Copyright (C) 2015-2017, Daz Jones (Dazzozo) <daz@dazzozo.com>
+ * Copyright (C) 2015-2017, SALT
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published
@@ -43,4 +43,4 @@ void mkey_set_data_path(mkey_ctx* ctx, const char* data_path);
 void mkey_set_default_device(mkey_ctx* ctx, const char* device);
 
 void mkey_init(mkey_ctx* ctx, bool debug, const char* data_path);
-int mkey_generate(mkey_ctx* ctx, const char* inquiry_number, u8 month, u8 day, const char* device);
+int mkey_generate(mkey_ctx* ctx, const char* inquiry_number, u8 month, u8 day, const char* device, char* master_key);
