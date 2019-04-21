@@ -1,7 +1,7 @@
 #
 # mkey - parental controls master key generator for certain video game consoles
-# Copyright (C) 2015-2017, Daz Jones (Dazzozo) <daz@dazzozo.com>
-# Copyright (C) 2015-2017, SALT
+# Copyright (C) 2015-2019, Daz Jones (Dazzozo) <daz@dazzozo.com>
+# Copyright (C) 2015-2019, SALT
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published
@@ -24,6 +24,7 @@ import os, struct, datetime
 from Crypto.Cipher import AES
 from Crypto.Hash import SHA256, HMAC
 from Crypto.Util import Counter
+from Crypto.Util.strxor import strxor
 from Crypto.Util.number import bytes_to_long, long_to_bytes
 
 # Only require hexdump for debugging.
@@ -79,8 +80,11 @@ class mkey_generator():
             },
         },
         "HAC": {
-            "algorithms": ["v3"],
+            "algorithms": ["v3", "v4"],
             "v3": {
+                "hmac_file": "hac_%02x.bin",
+            },
+            "v4": {
                 "hmac_file": "hac_%02x.bin",
             },
         },
@@ -144,7 +148,7 @@ class mkey_generator():
         mkey_data = struct.unpack("BB14x16s32s", data)
         return mkey_data
 
-    # Read HMAC key (v1/v3).
+    # Read HMAC key (v1/v3/v4).
     def _read_hmac_key(self, file_name):
         file_path = os.path.join(self._data_path, file_name)
         if self._dbg: print("Using %s." % file_path)
@@ -177,9 +181,14 @@ class mkey_generator():
             elif "v3" in algorithms:
                 return "v3"
             else:
-                raise ValueError("v1/v2 algorithms not supported by %s." % device)
+                raise ValueError("v1/v2/v3 algorithms not supported by %s." % device)
+        elif len(inquiry) == 6:
+            if "v4" in algorithms:
+                return "v4"
+            else:
+                raise ValueError("v4 algorithm not supported by %s." % device)
         else:
-            raise ValueError("Inquiry number must be 8 or 10 digits.")
+            raise ValueError("Inquiry number must be 6, 8 or 10 digits.")
 
     # CRC-32 implementation (v0).
     def _calculate_crc(self, poly, xorout, addout, inbuf):
@@ -342,7 +351,7 @@ class mkey_generator():
         master_key = output % 100000
         return "%05d" % master_key
 
-    def _generate_v3(self, props, inquiry):
+    def _generate_v3_v4(self, props, inquiry, aux = None):
         algorithm = props["algorithm"]
         traits = props["traits"]
 
@@ -350,9 +359,18 @@ class mkey_generator():
             self._data_path = None
 
         if not self._data_path:
-            raise ValueError("v3 attempted, but data directory doesn't exist or was not specified.")
+            raise ValueError("v3/v4 attempted, but data directory doesn't exist or was not specified.")
 
-        version = int((inquiry / 100000000) % 100)
+        if algorithm == "v4" and not aux:
+            raise ValueError("v4 attempted, but no auxiliary string (device ID required).")
+
+        if algorithm == "v4" and len(aux) != 16:
+            raise ValueError("v4 attempted, but auxiliary string (device ID) of invalid length.")
+
+        if algorithm == "v4":
+            version = int((inquiry / 10000) % 100)
+        else:
+            version = int((inquiry / 100000000) % 100)
 
         file_name = props["hmac_file"] % version
         mkey_hmac_key = self._read_hmac_key(file_name)
@@ -360,8 +378,24 @@ class mkey_generator():
         if self._dbg: print("")
 
         # Create the input buffer.
-        inbuf = "%010u" % (inquiry % 10000000000)
+        if algorithm == "v4":
+            inbuf = "%06u" % (inquiry % 1000000)
+        else:
+            inbuf = "%010u" % (inquiry % 10000000000)
+
         inbuf = inbuf.encode("ascii")
+
+        if algorithm == "v4":
+            inbuf += struct.pack(">I", 1)
+
+            device_id = struct.pack('<Q', int(aux, 16))
+            mkey_hmac_seed = device_id + mkey_hmac_key
+
+            if self._dbg:
+                print("HMAC key seed:")
+                self._hexdump(mkey_hmac_seed)
+
+            mkey_hmac_key = SHA256.new(mkey_hmac_seed).digest()
 
         if self._dbg:
             print("HMAC key:")
@@ -370,7 +404,15 @@ class mkey_generator():
             print("Hash input:")
             self._hexdump(inbuf)
 
-        outbuf = HMAC.new(mkey_hmac_key, inbuf, digestmod = SHA256).digest()
+        if algorithm == "v4":
+            outbuf = HMAC.new(mkey_hmac_key, inbuf, digestmod = SHA256).digest()
+            tmpbuf = outbuf
+
+            for i in range(1, 10000):
+                tmpbuf = HMAC.new(mkey_hmac_key, tmpbuf, digestmod = SHA256).digest()
+                outbuf = strxor(outbuf, tmpbuf)
+        else:
+            outbuf = HMAC.new(mkey_hmac_key, inbuf, digestmod = SHA256).digest()
 
         if self._dbg:
             print("Hash output:")
@@ -384,7 +426,7 @@ class mkey_generator():
         master_key = output % 100000000
         return "%08d" % master_key
 
-    def generate(self, inquiry, month = None, day = None, device = None):
+    def generate(self, inquiry, month = None, day = None, aux = None, device = None):
         inquiry = inquiry.replace(" ", "")
         if not inquiry.isdigit():
             raise ValueError("Inquiry string must represent a decimal number.")
@@ -432,8 +474,8 @@ class mkey_generator():
             output = self._generate_v0(props, inquiry, month, day)
         elif algorithm == "v1" or algorithm == "v2":
             output = self._generate_v1_v2(props, inquiry, month, day)
-        elif algorithm == "v3":
-            output = self._generate_v3(props, inquiry)
+        elif algorithm == "v3" or algorithm == "v4":
+            output = self._generate_v3_v4(props, inquiry, aux)
 
         return output
 
@@ -451,6 +493,9 @@ def main():
     desc = "day displayed on device (system date)"
     parser.add_argument("-d", "--day", type = int, help = desc)
 
+    desc = "auxiliary data (e.g. device ID)"
+    parser.add_argument("-a", "--aux", type = str, help = desc)
+
     desc = "device type (%s by default)" % mkey_generator.default_device
     parser.add_argument("device", type = str, help = desc, nargs = "?",
         choices = mkey_generator.devices, default = mkey_generator.default_device)
@@ -462,7 +507,7 @@ def main():
 
     mkey = mkey_generator(debug = args.verbose)
 
-    master_key = mkey.generate(args.inquiry, args.month, args.day, args.device)
+    master_key = mkey.generate(args.inquiry, args.month, args.day, args.aux, args.device)
     print("Master key is %s." % master_key)
 
 if __name__ == "__main__":

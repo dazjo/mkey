@@ -34,6 +34,10 @@ u32 getbe32(const u8* p);
 u32 getbe16(const u8* p);
 void putle16(u8* p, u16 n);
 void putle32(u8* p, u32 n);
+void putle64(u8* p, u64 n);
+void putbe16(u8* p, u16 n);
+void putbe32(u8* p, u32 n);
+void putbe64(u8* p, u64 n);
 
 u32 swap_uint32(u32 val);
 void reverse_endian(u32* buffer, size_t size);

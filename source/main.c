@@ -1,6 +1,6 @@
 /*
  * mkey - parental controls master key generator for certain video game consoles
- * Copyright (C) 2015-2017, Daz Jones (Dazzozo) <daz@dazzozo.com>
+ * Copyright (C) 2015-2019, Daz Jones (Dazzozo) <daz@dazzozo.com>
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published
@@ -38,12 +38,13 @@ int main(int argc, const char* argv[])
 
     if(argc < MAIN_ARGS_REQUIRED) {
 
-        printf("Usage: mkey <inquiry> [-p device] [-m month] [-d day] [-v]\n");
+        printf("Usage: mkey <inquiry> [-p device] [-m month] [-d day] [-a aux] [-v]\n");
         printf("mkey (c) 2015-2016, SALT\n\n");
 
         printf("inquiry          8 or 10 digit inquiry number\n");
         printf("month            month displayed on device (system time)\n");
-        printf("day              day displayed on device (system time)\n\n");
+        printf("day              day displayed on device (system time)\n");
+        printf("aux              auxiliary data (e.g. device ID)\n\n");
 
         const char* devices = main_format_devices();
         printf("device           device type: %s - %s by default\n", devices, default_device);
@@ -59,8 +60,8 @@ int main(int argc, const char* argv[])
     }
 
     const char* inquiry = argv[1];
-    if(strlen(inquiry) != 10 && strlen(inquiry) != 8) {
-        printf("Error: inquiry number must be 8 or 10 digits.\n");
+    if(strlen(inquiry) != 10 && strlen(inquiry) != 8 && strlen(inquiry) != 6) {
+        printf("Error: inquiry number must be 6, 8 or 10 digits.\n");
         exit(EXIT_FAILURE);
     }
 
@@ -73,6 +74,7 @@ int main(int argc, const char* argv[])
 
     u8 month = tm.tm_mon + 1;
     u8 day = tm.tm_mday;
+    const char* aux = NULL;
 
     const char* device = NULL;
     bool debug = false;
@@ -96,12 +98,13 @@ int main(int argc, const char* argv[])
             }
             day = strtoul(argv[i + 1], 0, 10);
         }
+        if(!strcmp(argv[i], "-a") || !strcmp(argv[i], "--aux")) aux = argv[i + 1];
     }
 
     if(debug) mkey_set_debug(&ctx, true);
 
     char master_key[10] = {0};
-    int result = mkey_generate(&ctx, inquiry, month, day, device, master_key);
+    int result = mkey_generate(&ctx, inquiry, month, day, aux, device, master_key);
     if(result < 0) {
         if(!debug) {
             printf("An error occurred. Your input values may be incorrect, or you may be missing a key file.\n");

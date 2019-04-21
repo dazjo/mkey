@@ -1,7 +1,7 @@
 /*
  * mkey - parental controls master key generator for certain video game consoles
- * Copyright (C) 2015-2017, Daz Jones (Dazzozo) <daz@dazzozo.com>
- * Copyright (C) 2015-2017, SALT
+ * Copyright (C) 2015-2019, Daz Jones (Dazzozo) <daz@dazzozo.com>
+ * Copyright (C) 2015-2019, SALT
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published
@@ -54,6 +54,10 @@ typedef struct {
 } mkey_v3_props;
 
 typedef struct {
+    const char* hmac_file;
+} mkey_v4_props;
+
+typedef struct {
     const char* device;
     u32 algorithms;
 
@@ -63,6 +67,7 @@ typedef struct {
     mkey_v1_props v1;
     mkey_v2_props v2;
     mkey_v3_props v3;
+    mkey_v4_props v4;
 } mkey_props;
 
 typedef struct {
@@ -78,7 +83,7 @@ static const mkey_props _props[sizeof(mkey_devices) / sizeof(*mkey_devices)] =
     [0] =
     {
         .device = mkey_devices[0],
-        .algorithms = 0b0001,
+        .algorithms = 0b00001,
         .big_endian = true,
         .v0 = {
             .poly = 0xEDB88320,
@@ -90,7 +95,7 @@ static const mkey_props _props[sizeof(mkey_devices) / sizeof(*mkey_devices)] =
     [1] =
     {
         .device = mkey_devices[1],
-        .algorithms = 0b0001,
+        .algorithms = 0b00001,
         .v0 = {
             .poly = 0xEDB88320,
             .xorout = 0xAAAA,
@@ -101,7 +106,7 @@ static const mkey_props _props[sizeof(mkey_devices) / sizeof(*mkey_devices)] =
     [2] =
     {
         .device = mkey_devices[2],
-        .algorithms = 0b0111,
+        .algorithms = 0b00111,
         .v0 = {
             .poly = 0xEDBA6320,
             .xorout = 0xAAAA,
@@ -119,7 +124,7 @@ static const mkey_props _props[sizeof(mkey_devices) / sizeof(*mkey_devices)] =
     [3] =
     {
         .device = mkey_devices[3],
-        .algorithms = 0b0101,
+        .algorithms = 0b00101,
         .big_endian = true,
         .v0 = {
             .poly = 0xEDBA6320,
@@ -136,8 +141,11 @@ static const mkey_props _props[sizeof(mkey_devices) / sizeof(*mkey_devices)] =
     [4] =
     {
         .device = mkey_devices[4],
-        .algorithms = 0b1000,
+        .algorithms = 0b11000,
         .v3 = {
+            .hmac_file = "hac_%02"PRIx8".bin",
+        },
+        .v4 = {
             .hmac_file = "hac_%02"PRIx8".bin",
         },
     },
@@ -178,13 +186,22 @@ static int mkey_detect_algorithm(mkey_session* session, const char* inquiry_numb
         else if (props->algorithms & BIT(3))
             return 3;
         else {
-            if(ctx->dbg) printf("Error: v1/v2 algorithms not supported by %s.\n", session->device);
+            if(ctx->dbg) printf("Error: v1/v2/v3 algorithms not supported by %s.\n", session->device);
+            return -1;
+        }
+    }
+
+    else if(strlen(inquiry_number) == 6) {
+        if(props->algorithms & BIT(4))
+            return 4;
+        else {
+            if(ctx->dbg) printf("Error: v4 algorithm not supported by %s.\n", session->device);
             return -1;
         }
     }
 
     else {
-        if(ctx->dbg) printf("Error: inquiry number must be 8 or 10 digits.\n");
+        if(ctx->dbg) printf("Error: inquiry number must be 6, 8 or 10 digits.\n");
         return -2;
     }
 }
@@ -231,7 +248,7 @@ static int mkey_generate_v1_v2(mkey_session* session, u64 inquiry, u8 month, u8 
 {
     int ret = 0;
     mkey_ctx* ctx = session->ctx;
-    const const mkey_props* props = session->props;
+    const mkey_props* props = session->props;
 
     struct stat st;
     if(!ctx->data_path_set || stat(ctx->data_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
@@ -374,15 +391,25 @@ static int mkey_generate_v1_v2(mkey_session* session, u64 inquiry, u8 month, u8 
     return 0;
 }
 
-static int mkey_generate_v3(mkey_session* session, u64 inquiry, char* master_key)
+static int mkey_generate_v3_v4(mkey_session* session, u64 inquiry, const char* aux, char* master_key)
 {
     int ret = 0;
     mkey_ctx* ctx = session->ctx;
-    const const mkey_props* props = session->props;
+    const mkey_props* props = session->props;
 
     struct stat st;
     if(!ctx->data_path_set || stat(ctx->data_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        if(ctx->dbg) printf("v3 attempted, but data directory doesn't exist or was not specified.\n");
+        if(ctx->dbg) printf("v3/v4 attempted, but data directory doesn't exist or was not specified.\n");
+        return -1;
+    }
+
+    if(session->algorithm == 4 && !aux) {
+        if(ctx->dbg) printf("v4 attempted, but no auxiliary string (device ID required).\n");
+        return -1;
+    }
+
+    if(session->algorithm == 4 && strlen(aux) != 16) {
+        if(ctx->dbg) printf("v4 attempted, but auxiliary string (device ID) of invalid length.\n");
         return -1;
     }
 
@@ -393,28 +420,72 @@ static int mkey_generate_v3(mkey_session* session, u64 inquiry, char* master_key
      * If this system uses masterkey.bin, there is an AES key for the region which is also required.
      * This key is used to decrypt the encrypted HMAC key stored in masterkey.bin. See below.
      */
-    u8 version = (inquiry / 100000000) % 100;
+    u8 version = 0;
+    if(session->algorithm == 4)
+        version = (inquiry / 10000) % 100;
+    else
+        version = (inquiry / 100000000) % 100;
 
     char file_name[MAX_PATH] = {0};
+    if(session->algorithm == 4)
+        snprintf(file_name, sizeof(file_name), props->v4.hmac_file, version);
+    else
+        snprintf(file_name, sizeof(file_name), props->v3.hmac_file, version);
 
-    snprintf(file_name, sizeof(file_name), props->v3.hmac_file, version);
     ret = mkey_read_hmac_key(session, file_name, data.hmac_key);
     if(ret) return -2;
 
     // Create the input buffer.
     char inbuf[15] = {0};
-    snprintf(inbuf, sizeof(inbuf), "%010"PRIu64, inquiry % 10000000000);
+    size_t inbuf_size = 0;
+
+    if(session->algorithm == 4)
+        snprintf(inbuf, sizeof(inbuf), "%06"PRIu64, inquiry % 1000000);
+    else
+        snprintf(inbuf, sizeof(inbuf), "%010"PRIu64, inquiry % 10000000000);
+
+    inbuf_size = strlen(inbuf);
+
+    if(session->algorithm == 4) {
+        putbe32((u8*)inbuf + strlen(inbuf), 1);
+        inbuf_size += sizeof(u32);
+
+        u64 device_id = strtoull(aux, 0, 16);
+        u8 mkey_hmac_seed[sizeof(device_id) + sizeof(data.hmac_key)] = {0};
+
+        putle64(mkey_hmac_seed, device_id);
+        memcpy(mkey_hmac_seed + sizeof(device_id), data.hmac_key, sizeof(data.hmac_key));
+
+        if(ctx->dbg) {
+            printf("\nHMAC key seed:\n");
+            hexdump(mkey_hmac_seed, sizeof(mkey_hmac_seed));
+        }
+
+        sha2(mkey_hmac_seed, sizeof(mkey_hmac_seed), data.hmac_key, 0);
+    }
 
     if(ctx->dbg) {
         printf("\nHMAC key:\n");
         hexdump(data.hmac_key, sizeof(data.hmac_key));
 
         printf("\nHash input:\n");
-        hexdump(inbuf, strlen(inbuf));
+        hexdump(inbuf, inbuf_size);
     }
 
     u8 outbuf[0x20] = {0};
-    sha2_hmac(data.hmac_key, sizeof(data.hmac_key), (u8*)inbuf, strlen(inbuf), outbuf, false);
+    if(session->algorithm == 4) {
+        u8 tmpbuf[sizeof(outbuf)] = {0};
+        sha2_hmac(data.hmac_key, sizeof(data.hmac_key), (u8*)inbuf, inbuf_size, outbuf, false);
+        memcpy(tmpbuf, outbuf, sizeof(tmpbuf));
+
+        for(int i = 1; i < 10000; i++) {
+            sha2_hmac(data.hmac_key, sizeof(data.hmac_key), tmpbuf, sizeof(tmpbuf), tmpbuf, false);
+            for(unsigned int j = 0; j < sizeof(tmpbuf); j++) {
+                outbuf[j] ^= tmpbuf[j];
+            }
+        }
+    } else
+        sha2_hmac(data.hmac_key, sizeof(data.hmac_key), (u8*)inbuf, strlen(inbuf), outbuf, false);
 
     if(ctx->dbg) {
         printf("\nHash output:\n");
@@ -431,7 +502,7 @@ static int mkey_generate_v3(mkey_session* session, u64 inquiry, char* master_key
     return 0;
 }
 
-int mkey_generate(mkey_ctx* ctx, const char* inquiry_number, u8 month, u8 day, const char* device, char* master_key)
+int mkey_generate(mkey_ctx* ctx, const char* inquiry_number, u8 month, u8 day, const char* aux, const char* device, char* master_key)
 {
     int res = 0;
 
@@ -472,8 +543,8 @@ int mkey_generate(mkey_ctx* ctx, const char* inquiry_number, u8 month, u8 day, c
         res = mkey_generate_v0(&session, inquiry, month, day, master_key);
     else if(session.algorithm == 1 || session.algorithm == 2)
         res = mkey_generate_v1_v2(&session, inquiry, month, day, master_key);
-    else if(session.algorithm == 3)
-        res = mkey_generate_v3(&session, inquiry, master_key);
+    else if(session.algorithm == 3 || session.algorithm == 4)
+        res = mkey_generate_v3_v4(&session, inquiry, aux, master_key);
 
     if(res) return -3;
 
@@ -568,7 +639,7 @@ static int mkey_read_mkey_file(mkey_session* session, const char* file_name, voi
     return 0;
 }
 
-// Read HMAC key (v1/v3).
+// Read HMAC key (v1/v3/v4).
 static int mkey_read_hmac_key(mkey_session* session, const char* file_name, void* out)
 {
     if(!file_name || !out) return -1;
