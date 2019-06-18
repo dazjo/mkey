@@ -58,11 +58,11 @@ class mkey_generator():
                 "addout": 0x1657,
             },
             "v1": {
-                "hmac_file": "v1_%02x.bin",
+                "hmac_file": "ctr_%02x.bin",
             },
             "v2": {
-                "mkey_file": "v2_%02x_%02x.bin",
-                "aes_file": "v2_aes_%02x.bin",
+                "mkey_file": "ctr_%02x_%02x.bin",
+                "aes_file": "ctr_aes_%02x.bin",
             },
         },
         "WUP": {
@@ -75,8 +75,8 @@ class mkey_generator():
             },
             "v2": {
                 "traits": ["no-versions"],
-                "mkey_file": "wii_%02x.bin",
-                "aes_file": "wii_aes_%02x.bin",
+                "mkey_file": "wup_%02x.bin",
+                "aes_file": "wup_aes_%02x.bin",
             },
         },
         "HAC": {

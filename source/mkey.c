@@ -113,11 +113,11 @@ static const mkey_props _props[sizeof(mkey_devices) / sizeof(*mkey_devices)] =
             .addout = 0x1657,
         },
         .v1 = {
-            .hmac_file = "v1_%02"PRIx8".bin",
+            .hmac_file = "ctr_%02"PRIx8".bin",
         },
         .v2 = {
-            .mkey_file = "v2_%02"PRIx8"_%02"PRIx8".bin",
-            .aes_file = "v2_aes_%02"PRIx8".bin",
+            .mkey_file = "ctr_%02"PRIx8"_%02"PRIx8".bin",
+            .aes_file = "ctr_aes_%02"PRIx8".bin",
         },
     },
 
@@ -133,8 +133,8 @@ static const mkey_props _props[sizeof(mkey_devices) / sizeof(*mkey_devices)] =
         },
         .v2 = {
             .no_versions = true,
-            .mkey_file = "wii_%02"PRIx8".bin",
-            .aes_file = "wii_aes_%02"PRIx8".bin",
+            .mkey_file = "wup_%02"PRIx8".bin",
+            .aes_file = "wup_aes_%02"PRIx8".bin",
         },
     },
 
